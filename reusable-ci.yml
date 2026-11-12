@@ -1,0 +1,89 @@
+name: Reusable CI - build and validate
+on:
+  workflow_call:
+    inputs:
+      runtime:
+        description: eks | ecs | lambda
+        required: true
+        type: string
+      aws_region:
+        required: true
+        type: string
+      ecr_repository:
+        required: true
+        type: string
+      build_context:
+        type: string
+        default: .
+    outputs:
+      image_digest:
+        description: Published digest for container runtimes
+        value: ${{ jobs.build.outputs.image_digest }}
+permissions: {}
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4 # production: pin action to audited full commit SHA
+        with:
+          persist-credentials: false
+      - name: Validate input
+        env:
+          RUNTIME: ${{ inputs.runtime }}
+          REPO: ${{ inputs.ecr_repository }}
+        run: |
+          case "$RUNTIME" in eks|ecs|lambda) ;; *) exit 1 ;; esac
+          [[ "$REPO" =~ ^[a-z0-9][a-z0-9._/-]*$ ]] || exit 1
+      - name: Python tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Dependency/security checks (fail closed when configured)
+        run: |
+          echo 'REFERENCE ONLY: connect org-enforced SAST/SCA and fail on policy threshold'
+          # This echo is NOT a security scan and must not be treated as a required security gate.
+  build:
+    needs: validate
+    if: inputs.runtime == 'eks' || inputs.runtime == 'ecs'
+    runs-on: ubuntu-24.04
+    environment: build
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      image_digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4 # production: SHA-pin
+        with:
+          persist-credentials: false
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4 # production: SHA-pin
+        with:
+          role-to-assume: ${{ vars.AWS_BUILD_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: gha-build
+      - name: ECR login
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2 # production: SHA-pin
+      - name: Build and publish immutable image
+        id: push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ inputs.ecr_repository }}
+          SHA: ${{ github.sha }}
+          CONTEXT: ${{ inputs.build_context }}
+        run: |
+          set -euo pipefail
+          docker build --pull -t "$REGISTRY/$REPO:$SHA" "$CONTEXT"
+          docker push "$REGISTRY/$REPO:$SHA"
+          digest=$(aws ecr describe-images --repository-name "$REPO" --image-ids imageTag="$SHA" --query 'imageDetails[0].imageDigest' --output text)
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Generate GitHub build provenance attestation
+        uses: actions/attest-build-provenance@v2 # production: SHA-pin and verify version capabilities
+        with:
+          subject-name: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr_repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
