@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "application": "sample-api",
+  "runtime": "ecs",
+  "environment": "stage",
+  "git_sha": "0123456789abcdef0123456789abcdef01234567",
+  "artifact": {
+    "repository": "123456789012.dkr.ecr.us-east-1.amazonaws.com/sample-api",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "provenance": {"issuer": "https://token.actions.githubusercontent.com", "verified": false},
+  "approvals": {"required": true, "verified": false}
+}
